@@ -249,6 +249,16 @@ body.mode-expanded .bubble { display: none !important; }
   color: var(--st-input);
 }
 .sess-detail .pbtn:hover { filter: brightness(1.2); }
+/* P0-1: remote window countdown + expired notice, ported from HS v0.3.9 */
+.sess-detail .premote {
+  margin-top: 6px; font-size: 10px; color: var(--fg-mute); text-align: right;
+}
+.sess-detail .pexpired {
+  margin-top: 8px; padding: 6px 10px; border-radius: 6px;
+  background: rgba(255,255,255,0.04);
+  border: 1px dashed rgba(255,255,255,0.14);
+  color: var(--fg-mute); font-size: 11px;
+}
 @keyframes bubble-pop { from { transform: scale(0.5); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 .bubble::after {
   content: ""; position: absolute; right: -7px; bottom: 10px;
@@ -362,3 +372,41 @@ body.mode-expanded .bubble { display: none !important; }
   border-style: dashed;
 }
 
+
+/* P2-4: install-toast at the top of the panel */
+#companion-toast {
+  position: fixed;
+  top: 12px; left: 50%; transform: translateX(-50%);
+  background: var(--bg-pane, #1b1d22);
+  border: 1px solid rgba(255,255,255,0.14);
+  color: var(--fg, #e8e6df);
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  z-index: 100;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+  pointer-events: none;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.4);
+}
+#companion-toast.ok  { border-color: rgba(74,222,128,0.45); color: var(--st-done); }
+#companion-toast.err { border-color: rgba(232,76,136,0.45); color: var(--st-input); }
+
+/* P1-1: reset-position button in the footer */
+.dd-foot .reset-pos-btn {
+  background: transparent;
+  border: 1px solid var(--line-2, rgba(255,255,255,0.10));
+  color: var(--fg-soft, #a8a59c);
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  margin-left: 6px;
+}
+.dd-foot .reset-pos-btn:hover {
+  color: var(--st-input); border-color: rgba(232,76,136,0.4);
+}
+
+/* NEW-1: menubar tray title 1Hz blink is done by JS toggling — no CSS needed. */

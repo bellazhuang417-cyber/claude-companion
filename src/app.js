@@ -22,6 +22,14 @@ const state = {
   lastAssistant: {},  // sid → full text of Claude's most recent message
   config: {},
   skins: [],
+  // P0-2: dismissed signature — ported from HS petSignature/petDismissedSig.
+  // When Bella × the bubble, we record the current pending batch's signature.
+  // Same batch on next tick → bubble stays hidden. NEW batch (new pending
+  // request) → signature changes → bubble comes back. Matches HS behavior.
+  dismissedSig: null,
+  shownSig: null,
+  // P2-1: last emit signature — skip re-render if payload is byte-identical.
+  lastSessionsHash: null,
 };
 
 function nowSeconds() {
@@ -46,6 +54,21 @@ function escapeHtml(s) {
   return String(s || "").replace(/[&<>"']/g, (c) => (
     { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
   ));
+}
+
+// P2-4: lightweight toast at the top of the panel. Auto-dismisses.
+function showToast(msg, kind = "ok") {
+  let el = document.getElementById("companion-toast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "companion-toast";
+    document.body.appendChild(el);
+  }
+  el.className = `companion-toast ${kind}`;
+  el.textContent = msg;
+  el.style.opacity = "1";
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => { el.style.opacity = "0"; }, 3500);
 }
 
 async function loadSkin(name) {
@@ -155,14 +178,25 @@ function renderSessions() {
       let permHtml = "";
       if (hasPerm) {
         const p = sess.pending_permission;
+        // P0-1: hook only waits REMOTE_WINDOW seconds before it gives up
+        // and falls back to the in-window dialog. Past that, clicking
+        // Allow here writes a decision file nobody consumes — total
+        // ghost button. Ported from Hammerspoon v0.3.9 behavior.
+        const REMOTE_WINDOW = 120;
+        const reqAge = nowSeconds() - (p.requested_at || sess.updated_at || 0);
+        const remoteAlive = p.requested_at && reqAge < REMOTE_WINDOW;
+        const buttonsHtml = remoteAlive
+          ? `<div class="pbtns">
+              <button class="pbtn allow" data-decide="allow" data-sid="${escapeHtml(sess.session_id)}">✓ Allow</button>
+              <button class="pbtn deny"  data-decide="deny"  data-sid="${escapeHtml(sess.session_id)}">✗ Deny</button>
+            </div>
+            <div class="premote">remote window ${Math.max(0, Math.round(REMOTE_WINDOW - reqAge))}s</div>`
+          : `<div class="pexpired">远程确认已超时 — 请到 Claude Code 窗口处理</div>`;
         permHtml = `
           <div class="action-title">● Permission requested · ${escapeHtml(p.tool || "tool")}</div>
           ${p.reason ? `<div class="preason">${escapeHtml(p.reason)}</div>` : ""}
           <div class="action-cmd">$ ${escapeHtml(p.command || "")}</div>
-          <div class="pbtns">
-            <button class="pbtn allow" data-decide="allow" data-sid="${escapeHtml(sess.session_id)}">✓ Allow</button>
-            <button class="pbtn deny"  data-decide="deny"  data-sid="${escapeHtml(sess.session_id)}">✗ Deny</button>
-          </div>`;
+          ${buttonsHtml}`;
       }
       html += `
         <div class="sess-detail">
@@ -190,6 +224,20 @@ function renderSkins() {
   `).join("");
 }
 
+// P0-2 helper: signature of the current pending batch. Same input →
+// same signature. Change → bubble may reappear even after user dismissed.
+function pendingSignature() {
+  const parts = [];
+  for (const s of state.sessions) {
+    if (s.effective_state === "pending") {
+      const p = s.pending_permission;
+      parts.push(s.session_id + ":" + (p && p.requested_at ? p.requested_at : "wait"));
+    }
+  }
+  parts.sort();
+  return parts.join("|");
+}
+
 function renderPet() {
   const sprite = document.getElementById("sprite");
   const bubble = document.getElementById("bubble");
@@ -197,7 +245,17 @@ function renderPet() {
   const bs = document.getElementById("bubble-sub");
   const src = petSrcFor(state.mood);
   if (sprite) sprite.src = src || "";
-  const showBubble = state.bubbleText && state.mood !== "idle" && !state.expanded;
+
+  // P0-2: honor dismissedSig — if user dismissed the current pending batch,
+  // keep the bubble hidden until the batch actually changes.
+  const sig = pendingSignature();
+  let showBubble = state.bubbleText && state.mood !== "idle" && !state.expanded;
+  if (showBubble && sig && sig === state.dismissedSig) showBubble = false;
+  // Once the batch changes, clear the dismissed marker so the next batch
+  // gets a fresh chance to alert.
+  if (sig !== state.dismissedSig) state.dismissedSig = null;
+  state.shownSig = showBubble ? sig : null;
+
   if (bubble) {
     bubble.hidden = !showBubble;
     if (showBubble && bt) {
@@ -220,6 +278,9 @@ function render() {
 // channel per Bella's choice: pet bubble ONLY, no system notifications.
 const announced = { done: new Set(), review: new Set() };
 let celebration = null;   // { mood, text, sub, timer } — overrides idle
+// P1-3: first payload should register existing done/running sessions as
+// "already known" so we don't replay yesterday's celebrations at startup.
+let announceInitialized = false;
 
 function longTaskSeconds() {
   return Number((state.config || {}).long_task_seconds) || 120;
@@ -245,6 +306,19 @@ function setCelebration(mood, text, sub, lingerMs) {
 function checkAnnouncements() {
   const who = state.petName;
   if (!who) return;   // wait for get_pet_name to resolve before announcing
+  // P1-3: on the very first payload, silently register everything so we
+  // don't spam Bella with a stream of stale "task finished ✓" bubbles
+  // from turns that completed while the app was closed.
+  if (!announceInitialized) {
+    for (const s of state.sessions) {
+      if (s.effective_state === "done") announced.done.add(s.session_id + ":" + s.updated_at);
+      if (s.effective_state === "running" && s.running_since) {
+        announced.review.add(s.session_id + ":" + s.running_since);
+      }
+    }
+    announceInitialized = true;
+    return;
+  }
   const threshold = longTaskSeconds();
   const anyPending = state.sessions.some(s => s.effective_state === "pending");
 
@@ -381,9 +455,12 @@ document.addEventListener("click", async (e) => {
         const payload = await invoke("get_skins");
         state.skins = payload.skins || [];
         render();
-        console.log("skin installed:", result);
+        // P2-4: visible confirmation — before this, Bella got zero feedback.
+        showToast(`✓ Installed skin: ${result.displayName || result.slug}`, "ok");
       }
-    } catch (err) { console.warn("skin install failed", err); }
+    } catch (err) {
+      showToast(`✗ Install failed: ${err && err.toString ? err.toString() : err}`, "err");
+    }
     e.preventDefault(); e.stopPropagation(); return;
   }
   // Skin delete × (must be checked BEFORE the tab click — × sits inside the tab)
@@ -417,10 +494,26 @@ document.addEventListener("click", async (e) => {
   if (ab) {
     const act = ab.getAttribute("data-action");
     if (act === "toggle-expand") toggleExpand();
-    else if (act === "quit") invoke("quit_app");
+    else if (act === "quit") {
+      // P2-3: confirm before killing the whole monitoring app.
+      if (window.confirm("Quit Claude Companion? 宠物和菜单栏 cc 图标都会消失,重启 App 才会回来。")) {
+        invoke("quit_app");
+      }
+    }
+    else if (act === "reset-position") {
+      // P1-1: rescue-hatch when the pet is stranded off-screen (multi-monitor pull).
+      try { await invoke("reset_pet_position"); showToast("Pet position reset", "ok"); }
+      catch (err) { showToast("Reset failed: " + err, "err"); }
+    }
     e.preventDefault(); e.stopPropagation(); return;
   }
   if (e.target.closest("#bubble-close")) {
+    // P0-2: record the current pending signature so this batch stays
+    // silent until it actually changes. Also cancel any celebration
+    // currently showing (Bella actively said "I'm done with this").
+    state.dismissedSig = pendingSignature();
+    if (celebration && celebration.timer) clearTimeout(celebration.timer);
+    celebration = null;
     document.getElementById("bubble").hidden = true;
     e.preventDefault(); e.stopPropagation(); return;
   }
@@ -491,15 +584,40 @@ document.addEventListener("mouseup", () => { petDrag.armed = false; });
   } catch (e) { console.warn("onMoved unavailable", e); }
 })();
 
+// P2-1 + P2-7: dedupe sessions push. Rust polls every 3s and re-emits
+// regardless of content; if the payload is byte-identical to last time
+// there's no reason to re-render (was resetting scroll position and
+// wasting CPU). Only skip DOM work — timer state stays intact.
+function sessionsFingerprint(list) {
+  // Strip volatile fields (running_since drift <1s doesn't warrant rerender).
+  return list.map(s => [
+    s.session_id, s.effective_state, s.updated_at,
+    s.title || "", s.project || "",
+    s.pending_permission ? (s.pending_permission.command || "") : "",
+    s.pending_permission ? s.pending_permission.requested_at || 0 : 0,
+    s.turn_duration || 0,
+  ].join("|")).join("\n");
+}
+
 listen("sessions", (event) => {
   const p = event.payload;
   state.sessions = p.sessions || [];
   state.top = p.top || "idle";
   state.serverNow = p.now || Math.floor(Date.now() / 1000);
   state.clientNowAtPush = Math.floor(Date.now() / 1000);
+  const fp = sessionsFingerprint(state.sessions);
+  const changed = fp !== state.lastSessionsHash;
+  state.lastSessionsHash = fp;
   checkAnnouncements();
   updatePetFromSessions();
-  render();
+  // Content unchanged → keep DOM (and Bella's scroll position). Still
+  // updatePetFromSessions so bubble reflects new "clock time".
+  if (changed) {
+    render();
+  } else {
+    // Just refresh pet artwork/bubble; skip the heavy session-list DOM rebuild.
+    renderPet();
+  }
 });
 listen("skins", (event) => {
   state.skins = event.payload.skins || [];
@@ -507,6 +625,38 @@ listen("skins", (event) => {
 });
 // Menubar tray icon click → toggle the panel (same as clicking the pet).
 listen("tray-click", () => { toggleExpand(); });
+
+// ---------- P0-3: click-through for transparent regions ----------
+// The window rectangle is fully opaque to clicks by default, even where
+// pixels are transparent — that's how Musk-standing-in-the-corner blocked
+// Bella from clicking on Claude Desktop underneath. Fix: track cursor
+// position; when it's over a visible element (pet, bubble, panel),
+// disable ignore-cursor-events; when it's over transparent air, enable
+// it so clicks pass through to whatever's behind.
+let clickThroughOn = false;
+async function setClickThrough(on) {
+  if (on === clickThroughOn) return;
+  clickThroughOn = on;
+  try { await invoke("set_click_through", { ignore: on }); } catch (e) {}
+}
+function interactiveHitAt(x, y) {
+  // In expanded mode, the entire panel is interactive → whole window.
+  if (state.expanded) return true;
+  // Idle mode: only over #pet-wrap counts (contains pet body + bubble).
+  const el = document.elementFromPoint(x, y);
+  if (!el) return false;
+  return !!el.closest("#pet-wrap");
+}
+document.addEventListener("mousemove", (e) => {
+  const alive = interactiveHitAt(e.clientX, e.clientY);
+  setClickThrough(!alive);
+});
+// When the window loses hover entirely (cursor left our frame), enable
+// click-through so we're not silently intercepting clicks off-window.
+document.addEventListener("mouseleave", () => setClickThrough(true));
+document.addEventListener("mouseenter", (e) => {
+  setClickThrough(!interactiveHitAt(e.clientX, e.clientY));
+});
 
 // First-run autostart prompt (per Bella's install decision: ask once).
 async function maybePromptAutostart(cfg) {

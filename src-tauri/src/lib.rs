@@ -26,6 +26,16 @@ fn skins_dir() -> PathBuf { menubar_dir().join("skins") }
 
 struct AppState {
     _watcher: Mutex<Option<RecommendedWatcher>>,
+    // NEW-1: last computed tray title + last pending-count, so the 1Hz
+    // blink thread can toggle the trailing "!" without re-reading status.
+    tray_state: Mutex<TrayTitleState>,
+}
+
+#[derive(Default)]
+struct TrayTitleState {
+    pending: bool,   // true when top == "pending"
+    n_active: usize, // running + pending
+    blink_on: bool,  // toggled 1Hz when pending — drives "!" vs " "
 }
 
 // ---------- JSON helpers ----------
@@ -201,20 +211,42 @@ fn build_sessions_payload() -> serde_json::Value {
     serde_json::json!({ "sessions": list, "top": top, "now": now_epoch })
 }
 
+// Compose the tray title from state.tray_state (n_active, pending, blink).
+// Broken out so both push_sessions and the 1Hz blink thread can call it.
+fn tray_title_for(pending: bool, n_active: usize, blink_on: bool) -> String {
+    if n_active == 0 { return "cc".into(); }
+    if pending {
+        format!("cc {}{}", n_active, if blink_on { " !" } else { "  " })
+    } else {
+        format!("cc {}", n_active)
+    }
+}
+
 // Build payload, refresh the tray title, and emit to the webview.
 fn push_sessions(app: &tauri::AppHandle) {
     let payload = build_sessions_payload();
+    let list = payload.get("sessions").and_then(|v| v.as_array());
+    let n_active = list.map(|l| l.iter().filter(|s| {
+        let st = s.get("effective_state").and_then(|v| v.as_str()).unwrap_or("");
+        st == "running" || st == "pending"
+    }).count()).unwrap_or(0);
+    let top = payload.get("top").and_then(|v| v.as_str()).unwrap_or("idle");
+    let pending = top == "pending";
+
+    // Snapshot into shared state so the 1Hz blink thread stays in sync.
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut ts) = state.tray_state.lock() {
+            ts.pending = pending;
+            ts.n_active = n_active;
+            // Reset blink phase whenever pending arrives — otherwise the "!"
+            // could appear mid-cycle.
+            if !ts.pending { ts.blink_on = false; }
+        }
+    }
     if let Some(tray) = app.tray_by_id("cc") {
-        let list = payload.get("sessions").and_then(|v| v.as_array());
-        let n_active = list.map(|l| l.iter().filter(|s| {
-            let st = s.get("effective_state").and_then(|v| v.as_str()).unwrap_or("");
-            st == "running" || st == "pending"
-        }).count()).unwrap_or(0);
-        let top = payload.get("top").and_then(|v| v.as_str()).unwrap_or("idle");
-        let title = if n_active == 0 { "cc".to_string() }
-            else if top == "pending" { format!("cc {} !", n_active) }
-            else { format!("cc {}", n_active) };
-        let _ = tray.set_title(Some(title));
+        let blink_on = app.try_state::<AppState>()
+            .and_then(|s| s.tray_state.lock().ok().map(|t| t.blink_on)).unwrap_or(false);
+        let _ = tray.set_title(Some(tray_title_for(pending, n_active, blink_on)));
     }
     let _ = app.emit("sessions", payload);
 }
@@ -519,6 +551,26 @@ fn set_click_through(window: tauri::WebviewWindow, ignore: bool) -> Result<(), S
     window.set_ignore_cursor_events(ignore).map_err(|e| e.to_string())
 }
 
+// P1-1: return true if (x, y_top, w, h) intersects any connected monitor
+// (all coords logical). Used to sanity-check saved positions after monitor
+// changes — outside all screens → snap back to default.
+fn rect_intersects_any_screen(window: &tauri::WebviewWindow, x: f64, y: f64, w: f64, h: f64) -> bool {
+    let Ok(monitors) = window.available_monitors() else { return false };
+    for m in monitors {
+        let scale = m.scale_factor();
+        let mp = m.position();
+        let ms = m.size();
+        let mx = mp.x as f64 / scale;
+        let my = mp.y as f64 / scale;
+        let mw = ms.width as f64 / scale;
+        let mh = ms.height as f64 / scale;
+        if x < mx + mw && x + w > mx && y < my + mh && y + h > my {
+            return true;
+        }
+    }
+    false
+}
+
 #[tauri::command]
 fn resize_window(window: tauri::WebviewWindow, width: f64, height: f64) -> Result<(), String> {
     let scale = window.scale_factor().unwrap_or(1.0);
@@ -528,9 +580,65 @@ fn resize_window(window: tauri::WebviewWindow, width: f64, height: f64) -> Resul
     let cur_logical_y = current_pos.y as f64 / scale;
     let cur_logical_x = current_pos.x as f64 / scale;
     let bottom = cur_logical_y + cur_logical_h;
-    let new_y = bottom - height;
+    let mut new_y = bottom - height;
+
+    // P1-2: don't let the panel's top edge fly above the screen. Find the
+    // monitor the pet's bottom-right sits on and clamp new_y to its usable
+    // top. Fallback to primary monitor when nothing matches.
+    if let Ok(monitors) = window.available_monitors() {
+        let anchor_x = cur_logical_x + 8.0;
+        let anchor_y = bottom - 4.0;
+        let mut top_bound: Option<f64> = None;
+        for m in &monitors {
+            let s = m.scale_factor();
+            let mp = m.position();
+            let ms = m.size();
+            let mx = mp.x as f64 / s;
+            let my = mp.y as f64 / s;
+            let mw = ms.width as f64 / s;
+            let mh = ms.height as f64 / s;
+            if anchor_x >= mx && anchor_x <= mx + mw && anchor_y >= my && anchor_y <= my + mh {
+                top_bound = Some(my + 8.0);  // 8px gap from menubar
+                break;
+            }
+        }
+        if top_bound.is_none() {
+            if let Some(m) = window.primary_monitor().ok().flatten() {
+                let s = m.scale_factor();
+                top_bound = Some(m.position().y as f64 / s + 8.0);
+            }
+        }
+        if let Some(top) = top_bound {
+            if new_y < top { new_y = top; }
+        }
+    }
+
     window.set_size(LogicalSize::new(width, height)).map_err(|e| e.to_string())?;
     window.set_position(LogicalPosition::new(cur_logical_x, new_y)).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// P1-1 recovery: called by frontend "Reset position" button.
+#[tauri::command]
+fn reset_pet_position(window: tauri::WebviewWindow) -> Result<(), String> {
+    let mut cfg = read_config_json();
+    if let Some(obj) = cfg.as_object_mut() {
+        obj.remove("tauri_pet_x");
+        obj.remove("tauri_pet_y_bottom");
+    }
+    let _ = write_config_json(&cfg);
+    if let Some(monitor) = window.primary_monitor().ok().flatten() {
+        let ms = monitor.size();
+        let scale = monitor.scale_factor();
+        let logical_w = ms.width as f64 / scale;
+        let logical_h = ms.height as f64 / scale;
+        let target_x = logical_w - 380.0 - 28.0;
+        let target_y = logical_h - 220.0 - 28.0;
+        window.set_size(LogicalSize::new(380.0, 220.0)).map_err(|e| e.to_string())?;
+        window.set_position(PhysicalPosition::new(
+            (target_x * scale) as i32, (target_y * scale) as i32
+        )).map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 
@@ -586,12 +694,12 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
-        .manage(AppState { _watcher: Mutex::new(None) })
+        .manage(AppState { _watcher: Mutex::new(None), tray_state: Mutex::new(TrayTitleState::default()) })
         .invoke_handler(tauri::generate_handler![
             get_sessions, get_skins, get_config, get_pet_name,
             set_skin, delete_skin, decide, get_skin_asset, get_skin_manifest,
             get_transcript_tail, get_last_assistant_message, install_skin_zip,
-            set_click_through, resize_window, start_drag,
+            set_click_through, resize_window, start_drag, reset_pet_position,
             save_pet_position, mark_autostart_prompted, quit_app,
         ])
         .setup(|app| {
@@ -605,22 +713,41 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // Restore saved position, else bottom-right corner.
+            // Restore saved position, else bottom-right corner. P1-1: if the
+            // saved position doesn't intersect any current monitor (Bella
+            // unplugged an external display), fall back to default corner
+            // instead of stranding the pet off-screen.
             let cfg = read_config_json();
             let saved_x = cfg.get("tauri_pet_x").and_then(|v| v.as_f64());
             let saved_yb = cfg.get("tauri_pet_y_bottom").and_then(|v| v.as_f64());
             if let Some(window) = app.get_webview_window("companion") {
+                let mut applied = false;
                 if let (Some(x), Some(yb)) = (saved_x, saved_yb) {
-                    let _ = window.set_position(LogicalPosition::new(x, yb - 220.0));
-                } else if let Some(monitor) = window.primary_monitor().ok().flatten() {
-                    let msize = monitor.size();
-                    let scale = monitor.scale_factor();
-                    let logical_w = msize.width as f64 / scale;
-                    let logical_h = msize.height as f64 / scale;
-                    let target_x = logical_w - 380.0 - 28.0;
-                    let target_y = logical_h - 220.0 - 28.0;
-                    let _ = window.set_position(PhysicalPosition::new(
-                        (target_x * scale) as i32, (target_y * scale) as i32));
+                    let y_top = yb - 220.0;
+                    if rect_intersects_any_screen(&window, x, y_top, 380.0, 220.0) {
+                        let _ = window.set_position(LogicalPosition::new(x, y_top));
+                        applied = true;
+                    } else {
+                        // Wipe the stale coords so we don't hit this next launch either.
+                        let mut cfg2 = read_config_json();
+                        if let Some(obj) = cfg2.as_object_mut() {
+                            obj.remove("tauri_pet_x");
+                            obj.remove("tauri_pet_y_bottom");
+                        }
+                        let _ = write_config_json(&cfg2);
+                    }
+                }
+                if !applied {
+                    if let Some(monitor) = window.primary_monitor().ok().flatten() {
+                        let msize = monitor.size();
+                        let scale = monitor.scale_factor();
+                        let logical_w = msize.width as f64 / scale;
+                        let logical_h = msize.height as f64 / scale;
+                        let target_x = logical_w - 380.0 - 28.0;
+                        let target_y = logical_h - 220.0 - 28.0;
+                        let _ = window.set_position(PhysicalPosition::new(
+                            (target_x * scale) as i32, (target_y * scale) as i32));
+                    }
                 }
             }
 
@@ -643,6 +770,24 @@ pub fn run() {
                 loop {
                     std::thread::sleep(Duration::from_secs(3));
                     push_sessions(&app_poll);
+                }
+            });
+            // NEW-1: 1Hz blink thread for the tray title when pending. When
+            // there's nothing pending, this is a cheap no-op every second.
+            let app_blink = app.handle().clone();
+            std::thread::spawn(move || {
+                loop {
+                    std::thread::sleep(Duration::from_millis(1000));
+                    let (pending, n_active, blink_on) = {
+                        let Some(state) = app_blink.try_state::<AppState>() else { continue };
+                        let Ok(mut ts) = state.tray_state.lock() else { continue };
+                        if !ts.pending { continue; }  // no pending → no blink
+                        ts.blink_on = !ts.blink_on;
+                        (ts.pending, ts.n_active, ts.blink_on)
+                    };
+                    if let Some(tray) = app_blink.tray_by_id("cc") {
+                        let _ = tray.set_title(Some(tray_title_for(pending, n_active, blink_on)));
+                    }
                 }
             });
             Ok(())
