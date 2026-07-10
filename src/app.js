@@ -5,7 +5,7 @@ const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
 const state = {
-  petName: "master",
+  petName: null,   // populated by get_pet_name on boot; null = don't build bubble text yet
   skin: "tac",
   skinManifest: null,
   skinAssets: {},
@@ -221,7 +221,8 @@ function setCelebration(mood, text, sub, lingerMs) {
 }
 
 function checkAnnouncements() {
-  const who = state.petName || "master";
+  const who = state.petName;
+  if (!who) return;   // wait for get_pet_name to resolve before announcing
   const threshold = longTaskSeconds();
   const anyPending = state.sessions.some(s => s.effective_state === "pending");
 
@@ -263,7 +264,8 @@ function updatePetFromSessions() {
   const perms   = pending.filter(s => s.pending_permission).length;
   if (pending.length > 0) {
     state.mood = "input";
-    const who = state.petName || "master";
+    const who = state.petName;
+    if (!who) { state.mood = "idle"; state.bubbleText = ""; state.bubbleSub = ""; return; }
     if (perms > 0) {
       state.bubbleText = pending.length === 1
         ? `${who}, a request needs your approval!`
