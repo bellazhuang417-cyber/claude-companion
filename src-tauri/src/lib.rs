@@ -120,34 +120,8 @@ fn effective_state(sess: &serde_json::Value, _now: i64) -> String {
     state
 }
 
-// Classify a "done" turn: is Claude asking a question / awaiting a
-// decision, or was it a task-completion message that needs no reply?
-// Heuristic: if the last non-empty sentence of Claude's last message
-// ends with '?' (or Chinese '？' / full-width '？') → decision. Fragile
-// on prose that ends mid-question inside code fences, but catches the
-// common cases; refine as Bella flags mistakes.
-fn classify_done(sess: &serde_json::Value) -> &'static str {
-    let Some(tp) = sess.get("transcript_path").and_then(|v| v.as_str()) else { return "completed" };
-    let Some(text) = last_assistant_text(tp) else { return "completed" };
-    // Strip trailing whitespace / bullet markers, then check final char.
-    let trimmed = text.trim_end_matches(|c: char| c.is_whitespace() || c == '*' || c == '·' || c == '-' || c == ')' );
-    if let Some(last) = trimmed.chars().last() {
-        if last == '?' || last == '？' { return "decision"; }
-    }
-    // Also catch questions that end with a period after "let me know" phrasing:
-    // scan the tail for common decision-seeking cues.
-    let tail: String = text.chars().rev().take(400).collect::<String>().chars().rev().collect();
-    let low = tail.to_lowercase();
-    let cues = ["should i ", "which would you", "would you like", "would you prefer",
-        "let me know", "your call", "do you want", "confirm ", "sound good",
-        "拍板", "让我知道", "帮我确认", "确认一下", "怎么选", "哪个", "同意吗"];
-    if cues.iter().any(|c| low.contains(c) || tail.contains(c)) { return "decision"; }
-    "completed"
-}
-
-// Extract Claude's last full assistant text (used by classify_done and
-// exposed via get_last_assistant_message). Kept as a plain fn so both
-// paths share one implementation.
+// Extract Claude's last full assistant text (exposed via
+// get_last_assistant_message so the panel can show it on expand).
 fn last_assistant_text(path: &str) -> Option<String> {
     use std::io::{Read, Seek, SeekFrom};
     let mut f = std::fs::File::open(path).ok()?;
@@ -195,14 +169,10 @@ fn build_sessions_payload() -> serde_json::Value {
             let updated_at = sess.get("updated_at").and_then(|v| v.as_i64()).unwrap_or(0);
             if now_epoch - updated_at > SESSION_TTL { continue; }
             let eff = effective_state(sess, now_epoch);
-            let done_kind = if eff == "done" { classify_done(sess) } else { "" };
             let mut clone = sess.clone();
             if let Some(obj) = clone.as_object_mut() {
                 obj.insert("session_id".into(), serde_json::Value::String(sid.clone()));
                 obj.insert("effective_state".into(), serde_json::Value::String(eff.clone()));
-                if !done_kind.is_empty() {
-                    obj.insert("done_kind".into(), serde_json::Value::String(done_kind.into()));
-                }
                 if eff != "pending" {
                     obj.insert("pending_permission".into(), serde_json::Value::Null);
                 }

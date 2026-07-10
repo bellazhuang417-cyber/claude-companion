@@ -73,16 +73,16 @@ function petSrcFor(mood) {
   return a[mood] || a.input || a.idle || "";
 }
 
-function statusLabel(s, hasPerm, ageSec, doneKind) {
+function statusLabel(s, hasPerm, ageSec) {
   if (s === "running") return `<span class="stx work">working</span>`;
   if (s === "pending") return hasPerm ? `<span class="stx">needs permission</span>`
-                                       : `<span class="stx">awaiting decision</span>`;
+                                       : `<span class="stx">needs reply</span>`;
   if (s === "done") {
-    // Two flavors: "decision" (Claude asked a question, needs your call) vs
-    // "completed" (finished, no action needed). Heuristic on Rust side.
-    if (doneKind === "decision") return `<span class="stx">awaiting decision</span>`;
-    if ((ageSec || 0) < 60)     return `<span class="stx done">done ✓</span>`;
-    return `<span class="stx done">completed</span>`;
+    // First 60s post-turn: green celebration. After that: "needs reply" —
+    // Bella clicks to expand and reads Claude's last message to decide
+    // whether it's a question or just a completion.
+    if ((ageSec || 0) < 60) return `<span class="stx done">done ✓</span>`;
+    return `<span class="stx">needs reply</span>`;
   }
   return `<span class="stx idle">idle</span>`;
 }
@@ -113,11 +113,11 @@ function renderSessions() {
     const expanded = state.expandedSid === sess.session_id;
     html += `
       <div class="sess ${expanded ? "expanded" : ""}"
-           data-sid="${escapeHtml(sess.session_id)}" data-status="${escapeHtml(st)}" data-done-kind="${escapeHtml(sess.done_kind || '')}">
+           data-sid="${escapeHtml(sess.session_id)}" data-status="${escapeHtml(st)}">
         <div class="av"></div>
         <div class="mid">
           <div class="nm">${escapeHtml(sess.title || sess.label || "(no recent message)")}</div>
-          <div class="meta">${escapeHtml(sess.project || "session")} · ${statusLabel(st, hasPerm, nowSeconds() - (sess.updated_at || 0), sess.done_kind)}
+          <div class="meta">${escapeHtml(sess.project || "session")} · ${statusLabel(st, hasPerm, nowSeconds() - (sess.updated_at || 0))}
             ${sess.cwd ? ` · <span class="cwd">${escapeHtml(shortCwd(sess.cwd))}</span>` : ""}
           </div>
         </div>

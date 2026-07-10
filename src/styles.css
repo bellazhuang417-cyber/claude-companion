@@ -362,7 +362,3 @@ body.mode-expanded .bubble { display: none !important; }
   border-style: dashed;
 }
 
-/* Done-but-awaiting-decision (Claude asked a question) shares the pink
-   left-bar with real pending so the eye picks it up first. */
-.sess[data-status="done"][data-done-kind="decision"] { border-left-color: var(--st-input); }
-.sess[data-status="done"][data-done-kind="decision"] .meta .stx { color: var(--st-input); }
