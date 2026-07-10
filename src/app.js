@@ -533,11 +533,13 @@ document.addEventListener("keydown", (e) => {
 // a native window drag. That includes empty panel space (header background,
 // gutter between rows, footer background) — so Bella can grab the panel
 // itself to move the window without hunting for tiny transparent corners.
-// Empty areas (panel background, transparent margins): drag immediately.
+// Empty areas + bubble body: drag. Bubble text/border is a natural grab
+// handle (users expect to move the whole thing by its speech balloon).
+// Exclude buttons and interactive controls only.
 document.addEventListener("mousedown", (e) => {
   if (e.button !== 0) return;
   if (e.target.closest(
-    "#pet-body, .bubble, .sess, button, input, textarea, [data-decide], [data-skin], [data-action]"
+    "#pet-body, .sess, button, input, textarea, [data-decide], [data-skin], [data-action]"
   )) return;
   invoke("start_drag");
 });
@@ -626,37 +628,15 @@ listen("skins", (event) => {
 // Menubar tray icon click → toggle the panel (same as clicking the pet).
 listen("tray-click", () => { toggleExpand(); });
 
-// ---------- P0-3: click-through for transparent regions ----------
-// The window rectangle is fully opaque to clicks by default, even where
-// pixels are transparent — that's how Musk-standing-in-the-corner blocked
-// Bella from clicking on Claude Desktop underneath. Fix: track cursor
-// position; when it's over a visible element (pet, bubble, panel),
-// disable ignore-cursor-events; when it's over transparent air, enable
-// it so clicks pass through to whatever's behind.
-let clickThroughOn = false;
-async function setClickThrough(on) {
-  if (on === clickThroughOn) return;
-  clickThroughOn = on;
-  try { await invoke("set_click_through", { ignore: on }); } catch (e) {}
-}
-function interactiveHitAt(x, y) {
-  // In expanded mode, the entire panel is interactive → whole window.
-  if (state.expanded) return true;
-  // Idle mode: only over #pet-wrap counts (contains pet body + bubble).
-  const el = document.elementFromPoint(x, y);
-  if (!el) return false;
-  return !!el.closest("#pet-wrap");
-}
-document.addEventListener("mousemove", (e) => {
-  const alive = interactiveHitAt(e.clientX, e.clientY);
-  setClickThrough(!alive);
-});
-// When the window loses hover entirely (cursor left our frame), enable
-// click-through so we're not silently intercepting clicks off-window.
-document.addEventListener("mouseleave", () => setClickThrough(true));
-document.addEventListener("mouseenter", (e) => {
-  setClickThrough(!interactiveHitAt(e.clientX, e.clientY));
-});
+// Note: mousemove-driven click-through was tried and reverted. Once the
+// window opens ignore_cursor_events, the webview stops receiving any
+// mouse events — so we can never detect "cursor moved back over the ×
+// button" and re-enable clicks. Result: × button broken, drag broken.
+//
+// P0-3 real fix is to make the window itself smaller so the transparent
+// dead zone shrinks (see resize_window / setup — window is now sized to
+// hug the pet + bubble tightly in idle mode). If perfect passthrough is
+// ever needed, it requires a native NSEvent monitor in Rust, not JS.
 
 // First-run autostart prompt (per Bella's install decision: ask once).
 async function maybePromptAutostart(cfg) {
