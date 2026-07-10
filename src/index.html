@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=380, initial-scale=1" />
+    <title>Claude Companion</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="app.js" defer></script>
+  </head>
+  <body class="mode-idle">
+    <div class="dropdown">
+      <div class="dd-head">
+        <div class="h-title">
+          <span class="tilde">~</span>claude-code
+          <span class="pid" id="head-count">· 0 sessions</span>
+        </div>
+        <div class="summary">
+          <span class="sx work"><i class="sd"></i><span id="cnt-run">0</span> run</span>
+          <span class="sx input"><i class="sd"></i><span id="cnt-wait">0</span> wait</span>
+          <span class="sx done"><i class="sd"></i><span id="cnt-done">0</span> done</span>
+        </div>
+        <button class="panel-close" data-action="toggle-expand" title="Collapse (Esc)">✕</button>
+      </div>
+      <div class="sess-list" id="sess-list">
+        <div class="empty">Loading sessions…</div>
+      </div>
+      <div class="dd-foot">
+        <div class="dd-foot-row">
+          <span class="heart"><span class="live"></span>Watching status.json</span>
+          <button class="quit-btn" data-action="quit">Quit</button>
+        </div>
+        <div class="skin-picker">
+          <span class="sp-label">Skin</span>
+          <span class="sp-tabs" id="sp-tabs"></span>
+          <button class="sp-add" id="skin-add" title="Install a skin from a .zip">+</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="pet-wrap">
+      <div class="bubble" id="bubble" hidden>
+        <span class="close" id="bubble-close">✕</span>
+        <div class="txt" id="bubble-text"></div>
+        <div class="sub" id="bubble-sub"></div>
+      </div>
+      <div class="pet-body" id="pet-body">
+        <img class="sprite" id="sprite" src="" alt="pet"/>
+      </div>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,54 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Claude Companion",
+  "version": "1.0.0-beta.1",
+  "identifier": "space.bella.claude-companion",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "companion",
+        "title": "Claude Companion",
+        "url": "index.html",
+        "width": 380,
+        "height": 220,
+        "minWidth": 320,
+        "minHeight": 200,
+        "transparent": true,
+        "decorations": false,
+        "resizable": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "shadow": false,
+        "focus": false,
+        "acceptFirstMouse": true,
+        "x": 1000,
+        "y": 600
+      }
+    ],
+    "security": {
+      "csp": null
+    },
+    "macOSPrivateApi": true
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "dmg",
+      "app"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "DeveloperTool",
+    "shortDescription": "Companion pet demo",
+    "longDescription": "A Tauri proof-of-concept for the Claude Code menubar companion. Transparent floating window with a draggable animated pet."
+  }
+}
