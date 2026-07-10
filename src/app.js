@@ -281,27 +281,48 @@ function checkAnnouncements() {
   }
 }
 
+// Full state matrix — every effective_state maps to a definite pet mood
+// so the pet visual never disagrees with the panel labels. Priority
+// order (top wins): user-facing celebration > pending-perm > pending-reply
+// or stale-done > running > all-idle.
 function updatePetFromSessions() {
-  const pending = state.sessions.filter(s => s.effective_state === "pending");
-  const perms   = pending.filter(s => s.pending_permission).length;
-  if (pending.length > 0) {
-    state.mood = "input";
-    const who = state.petName;
-    if (!who) { state.mood = "idle"; state.bubbleText = ""; state.bubbleSub = ""; return; }
-    if (perms > 0) {
-      state.bubbleText = pending.length === 1
-        ? `${who}, a request needs your approval!`
-        : `${who}, ${pending.length} requests need your approval!`;
-    } else {
-      state.bubbleText = pending.length === 1
-        ? `${who}, a session is waiting for your reply~`
-        : `${who}, ${pending.length} sessions are waiting for your reply~`;
-    }
-    state.bubbleSub = pending.map(s => s.project || "session").join(" · ");
-  } else if (celebration) {
+  const now = nowSeconds();
+  const s = state.sessions;
+  const pendingPerm  = s.filter(x => x.effective_state === "pending" && x.pending_permission);
+  const pendingReply = s.filter(x => x.effective_state === "pending" && !x.pending_permission);
+  const staleDone    = s.filter(x => x.effective_state === "done" && (now - (x.updated_at || 0)) >= 60);
+  const running      = s.filter(x => x.effective_state === "running");
+  const who = state.petName;
+
+  // Celebration timer (task finished / still on it) overrides idle / running.
+  if (celebration) {
     state.mood = celebration.mood;
     state.bubbleText = celebration.text;
     state.bubbleSub = celebration.sub;
+    return;
+  }
+  if (!who) { state.mood = "idle"; state.bubbleText = ""; state.bubbleSub = ""; return; }
+
+  if (pendingPerm.length > 0) {
+    state.mood = "input";
+    state.bubbleText = pendingPerm.length === 1
+      ? `${who}, a request needs your approval!`
+      : `${who}, ${pendingPerm.length} requests need your approval!`;
+    state.bubbleSub = pendingPerm.map(x => x.project || "session").join(" · ");
+  } else if (pendingReply.length + staleDone.length > 0) {
+    // Panel label is "needs reply" for both pending-no-perm and done-≥60s;
+    // pet matches with the input running mood so nothing looks stalled.
+    const list = [...pendingReply, ...staleDone];
+    state.mood = "input";
+    state.bubbleText = list.length === 1
+      ? `${who}, a session is waiting for your reply~`
+      : `${who}, ${list.length} sessions are waiting for your reply~`;
+    state.bubbleSub = list.map(x => x.project || "session").join(" · ");
+  } else if (running.length > 0) {
+    // Something in flight, no user action required. Pet looks thoughtful
+    // (review = Musk's thinking pose) but stays quiet — no bubble.
+    state.mood = "review";
+    state.bubbleText = ""; state.bubbleSub = "";
   } else {
     state.mood = "idle";
     state.bubbleText = ""; state.bubbleSub = "";
