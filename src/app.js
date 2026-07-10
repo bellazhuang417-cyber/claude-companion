@@ -19,6 +19,7 @@ const state = {
   expanded: false,
   expandedSid: null,
   logs: {},           // sid → [{kind, text}] transcript tail
+  lastAssistant: {},  // sid → full text of Claude's most recent message
   config: {},
   skins: [],
 };
@@ -124,6 +125,20 @@ function renderSessions() {
       </div>
     `;
     if (expanded) {
+      // What Claude actually said last — this is what Bella needs to read
+      // before she can reply. Shown at the top, full text, no truncation.
+      const lastMsg = state.lastAssistant[sess.session_id];
+      let waitingHtml = "";
+      if (st === "done" || (st === "pending" && !hasPerm)) {
+        if (lastMsg === undefined) {
+          waitingHtml = `<div class="last-assistant loading">Loading Claude's last message…</div>`;
+        } else if (lastMsg) {
+          waitingHtml = `<div class="last-assistant">
+            <div class="la-label">Claude's last message</div>
+            <div class="la-text">${escapeHtml(lastMsg)}</div>
+          </div>`;
+        }
+      }
       // Transcript log tail (loaded async on expand)
       const lines = state.logs[sess.session_id];
       let logHtml = "";
@@ -151,6 +166,7 @@ function renderSessions() {
       }
       html += `
         <div class="sess-detail">
+          ${waitingHtml}
           <div class="log">${logHtml}</div>
           ${permHtml}
         </div>
@@ -316,12 +332,16 @@ document.addEventListener("click", async (e) => {
     const sid = row.getAttribute("data-sid");
     state.expandedSid = state.expandedSid === sid ? null : sid;
     render();
-    // Fetch transcript tail asynchronously for the expanded row's log
+    // Fetch transcript tail + Claude's last full message asynchronously
     if (state.expandedSid === sid) {
       const sess = state.sessions.find(s => s.session_id === sid);
       if (sess && sess.transcript_path) {
         invoke("get_transcript_tail", { path: sess.transcript_path, n: 6 })
           .then(lines => { state.logs[sid] = lines || []; render(); })
+          .catch(() => {});
+        // Full text of Claude's last message — the "what am I waiting for" content
+        invoke("get_last_assistant_message", { path: sess.transcript_path })
+          .then(text => { state.lastAssistant[sid] = text || ""; render(); })
           .catch(() => {});
       }
     }

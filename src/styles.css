@@ -328,3 +328,36 @@ body.mode-expanded .bubble { display: none !important; }
 }
 .skin-picker .sp-tab:hover .sp-del { display: block; }
 .skin-picker .sp-tab .sp-del:hover { background: rgba(232,76,136,0.3); color: #fff; }
+
+/* Last-assistant message shown above the transcript log in expanded detail —
+   this is what Claude actually said, so Bella can read it and decide how to reply. */
+.sess-detail .last-assistant {
+  background: rgba(232,76,136,0.06);
+  border: 1px solid rgba(232,76,136,0.22);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 8px 0 10px 26px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.sess-detail .last-assistant .la-label {
+  color: var(--st-input);
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.sess-detail .last-assistant .la-text {
+  color: #f4e9ee;
+  font-family: var(--sans);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.sess-detail .last-assistant.loading {
+  color: var(--fg-mute);
+  font-style: italic;
+  background: transparent;
+  border-style: dashed;
+}

@@ -342,6 +342,46 @@ fn get_transcript_tail(path: String, n: usize) -> Vec<serde_json::Value> {
     out
 }
 
+// Return the FULL text of Claude's most recent assistant message —
+// i.e. the actual content Bella needs to read before replying. Unlike
+// get_transcript_tail this isn't truncated, so the panel can show
+// what Claude is actually waiting on.
+#[tauri::command]
+fn get_last_assistant_message(path: String) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(&path).ok()?;
+    let size = f.metadata().ok()?.len();
+    let start = size.saturating_sub(512 * 1024);
+    f.seek(SeekFrom::Start(start)).ok()?;
+    let mut buf = String::new();
+    f.read_to_string(&mut buf).ok()?;
+    let mut latest: Option<String> = None;
+    for line in buf.lines() {
+        let Ok(d) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        if d.get("type").and_then(|v| v.as_str()) != Some("assistant") { continue; }
+        let Some(msg) = d.get("message") else { continue };
+        let text = match msg.get("content") {
+            Some(serde_json::Value::String(s)) => s.clone(),
+            Some(serde_json::Value::Array(parts)) => {
+                let mut acc = String::new();
+                for p in parts {
+                    if p.get("type").and_then(|v| v.as_str()) == Some("text") {
+                        if let Some(t) = p.get("text").and_then(|v| v.as_str()) {
+                            if !acc.is_empty() { acc.push('\n'); }
+                            acc.push_str(t);
+                        }
+                    }
+                }
+                acc
+            }
+            _ => String::new(),
+        };
+        let trimmed = text.trim();
+        if !trimmed.is_empty() { latest = Some(trimmed.to_string()); }
+    }
+    latest
+}
+
 // ---------- Skin installer (port of Hammerspoon installSkinFromZip) ----------
 fn slugify(s: &str) -> String {
     let mut out: String = s.to_lowercase().chars()
@@ -548,7 +588,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_sessions, get_skins, get_config, get_pet_name,
             set_skin, delete_skin, decide, get_skin_asset, get_skin_manifest,
-            get_transcript_tail, install_skin_zip,
+            get_transcript_tail, get_last_assistant_message, install_skin_zip,
             set_click_through, resize_window, start_drag,
             save_pet_position, mark_autostart_prompted, quit_app,
         ])
