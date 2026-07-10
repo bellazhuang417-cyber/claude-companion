@@ -229,6 +229,29 @@ fn get_pet_name() -> String {
         .unwrap_or_else(|| "master".to_string())
 }
 
+// Delete an installed skin. Guards: built-in "tac" is undeletable, and the
+// name must be a plain slug (no path tricks). If the deleted skin was
+// active, fall back to "tac".
+#[tauri::command]
+fn delete_skin(name: String) -> Result<serde_json::Value, String> {
+    if name == "tac" { return Err("built-in skin cannot be deleted".into()); }
+    if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+        return Err(format!("bad skin name: {}", name));
+    }
+    let dir = skins_dir().join(&name);
+    if !dir.is_dir() { return Err(format!("skin not found: {}", name)); }
+    std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+    let mut cfg = read_config_json();
+    let was_active = cfg.get("skin").and_then(|v| v.as_str()) == Some(name.as_str());
+    if was_active {
+        if let Some(obj) = cfg.as_object_mut() {
+            obj.insert("skin".into(), serde_json::Value::String("tac".into()));
+        }
+        write_config_json(&cfg)?;
+    }
+    Ok(build_skins_payload())
+}
+
 #[tauri::command]
 fn set_skin(name: String) -> Result<serde_json::Value, String> {
     let mut cfg = read_config_json();
@@ -525,7 +548,7 @@ pub fn run() {
         .manage(AppState { _watcher: Mutex::new(None) })
         .invoke_handler(tauri::generate_handler![
             get_sessions, get_skins, get_config, get_pet_name,
-            set_skin, decide, get_skin_asset, get_skin_manifest,
+            set_skin, delete_skin, decide, get_skin_asset, get_skin_manifest,
             get_transcript_tail, install_skin_zip,
             set_click_through, resize_window, start_drag,
             save_pet_position, mark_autostart_prompted, quit_app,

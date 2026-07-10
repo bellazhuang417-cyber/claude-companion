@@ -159,7 +159,11 @@ function renderSkins() {
   if (!tabs) return;
   tabs.innerHTML = state.skins.map(s => `
     <button class="sp-tab ${s.active ? "active" : ""}" data-skin="${escapeHtml(s.name)}">
-      ${escapeHtml(s.displayName || s.name)}
+      ${escapeHtml(s.displayName || s.name)}${
+        s.name !== "tac"
+          ? `<span class="sp-del" data-del-skin="${escapeHtml(s.name)}" title="Delete this skin">×</span>`
+          : ""
+      }
     </button>
   `).join("");
 }
@@ -331,6 +335,22 @@ document.addEventListener("click", async (e) => {
         console.log("skin installed:", result);
       }
     } catch (err) { console.warn("skin install failed", err); }
+    e.preventDefault(); e.stopPropagation(); return;
+  }
+  // Skin delete × (must be checked BEFORE the tab click — × sits inside the tab)
+  const delBtn = e.target.closest("[data-del-skin]");
+  if (delBtn) {
+    const name = delBtn.getAttribute("data-del-skin");
+    const label = delBtn.closest(".sp-tab")?.textContent?.replace("×", "").trim() || name;
+    if (window.confirm(`Delete skin "${label}"?\n删除皮肤「${label}」？文件将从磁盘移除。`)) {
+      try {
+        const payload = await invoke("delete_skin", { name });
+        state.skins = payload.skins || [];
+        // If the deleted skin was in use, backend already fell back to tac.
+        if (state.skin === name) await loadSkin("tac");
+        render();
+      } catch (err) { console.warn("delete failed", err); }
+    }
     e.preventDefault(); e.stopPropagation(); return;
   }
   const sb = e.target.closest("[data-skin]");
