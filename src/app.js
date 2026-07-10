@@ -72,11 +72,17 @@ function petSrcFor(mood) {
   return a[mood] || a.input || a.idle || "";
 }
 
-function statusLabel(s, hasPerm) {
+function statusLabel(s, hasPerm, ageSec) {
   if (s === "running") return `<span class="stx work">working</span>`;
   if (s === "pending") return hasPerm ? `<span class="stx">needs permission</span>`
                                        : `<span class="stx">needs reply</span>`;
-  if (s === "done")    return `<span class="stx done">done ✓</span>`;
+  // done ✓ for the first minute after the turn ends (fresh celebration),
+  // then switches to "needs reply" — matches Claude Desktop's "Needs input"
+  // language for any completed turn the user hasn't replied to yet.
+  if (s === "done") {
+    if ((ageSec || 0) < 60) return `<span class="stx done">done ✓</span>`;
+    return `<span class="stx">needs reply</span>`;
+  }
   return `<span class="stx idle">idle</span>`;
 }
 
@@ -110,7 +116,7 @@ function renderSessions() {
         <div class="av"></div>
         <div class="mid">
           <div class="nm">${escapeHtml(sess.title || sess.label || "(no recent message)")}</div>
-          <div class="meta">${escapeHtml(sess.project || "session")} · ${statusLabel(st, hasPerm)}
+          <div class="meta">${escapeHtml(sess.project || "session")} · ${statusLabel(st, hasPerm, nowSeconds() - (sess.updated_at || 0))}
             ${sess.cwd ? ` · <span class="cwd">${escapeHtml(shortCwd(sess.cwd))}</span>` : ""}
           </div>
         </div>

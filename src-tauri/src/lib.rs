@@ -50,9 +50,12 @@ fn write_config_json(cfg: &serde_json::Value) -> Result<(), String> {
 }
 
 // ---------- State reconciliation (ported from Hammerspoon init.lua) ----------
+// SESSION_TTL is the only hard cutoff — matches Claude Desktop's own
+// "unarchived and recent" definition. done / pending do NOT auto-expire
+// into idle any more: Claude UI shows "Needs input" for any completed
+// turn until the user replies, so silently converting to idle disagrees
+// with the UI. Falling out of view happens via TTL only.
 const SESSION_TTL: i64 = 24 * 3600;
-const STALE_REPLY_TIMEOUT: i64 = 2 * 3600;
-const DONE_TIMEOUT: i64 = 30 * 60;
 
 fn transcript_last_event(path: &str) -> Option<String> {
     use std::io::{Read, Seek, SeekFrom};
@@ -92,12 +95,12 @@ fn transcript_last_event(path: &str) -> Option<String> {
     last
 }
 
-fn effective_state(sess: &serde_json::Value, now: i64) -> String {
+fn effective_state(sess: &serde_json::Value, _now: i64) -> String {
     let raw = sess.get("state").and_then(|v| v.as_str()).unwrap_or("idle").to_string();
     let updated_at = sess.get("updated_at").and_then(|v| v.as_i64()).unwrap_or(0);
-    let age = now - updated_at;
     let mut state = raw;
 
+    // Transcript reconciliation still runs — it corrects hook drift.
     if let Some(tp) = sess.get("transcript_path").and_then(|v| v.as_str()) {
         if !tp.is_empty() {
             if let Ok(meta) = std::fs::metadata(tp) {
@@ -114,10 +117,6 @@ fn effective_state(sess: &serde_json::Value, now: i64) -> String {
             }
         }
     }
-
-    let has_perm = sess.get("pending_permission").map(|v| !v.is_null()).unwrap_or(false);
-    if state == "pending" && !has_perm && age > STALE_REPLY_TIMEOUT { state = "idle".into(); }
-    if state == "done" && age > DONE_TIMEOUT { state = "idle".into(); }
     state
 }
 
