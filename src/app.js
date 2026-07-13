@@ -238,6 +238,30 @@ function pendingSignature() {
   return parts.join("|");
 }
 
+// Auto-dismiss: bubble goes away on its own after N seconds so Bella
+// isn't nagged forever after she's already seen it. Behaves exactly
+// like she clicked × — same batch stays silent until a NEW pending
+// request arrives (signature changes). Celebration / review bubbles
+// have their own linger timers and are NOT touched by this.
+const BUBBLE_AUTO_DISMISS_MS = 8000;
+let autoDismissTimer = null;
+let autoDismissTrackedSig = null;
+function scheduleAutoDismiss(sig) {
+  if (sig === autoDismissTrackedSig) return;   // already scheduled for this batch
+  autoDismissTrackedSig = sig;
+  if (autoDismissTimer) clearTimeout(autoDismissTimer);
+  autoDismissTimer = setTimeout(() => {
+    if (autoDismissTrackedSig) {
+      state.dismissedSig = autoDismissTrackedSig;
+      render();
+    }
+  }, BUBBLE_AUTO_DISMISS_MS);
+}
+function cancelAutoDismiss() {
+  autoDismissTrackedSig = null;
+  if (autoDismissTimer) { clearTimeout(autoDismissTimer); autoDismissTimer = null; }
+}
+
 function renderPet() {
   const sprite = document.getElementById("sprite");
   const bubble = document.getElementById("bubble");
@@ -255,6 +279,14 @@ function renderPet() {
   // gets a fresh chance to alert.
   if (sig !== state.dismissedSig) state.dismissedSig = null;
   state.shownSig = showBubble ? sig : null;
+
+  // Auto-dismiss: only for "input" mood (pending permission / needs-reply).
+  // Celebration and review bubbles manage their own linger via setCelebration.
+  if (showBubble && state.mood === "input" && sig) {
+    scheduleAutoDismiss(sig);
+  } else {
+    cancelAutoDismiss();
+  }
 
   if (bubble) {
     bubble.hidden = !showBubble;
