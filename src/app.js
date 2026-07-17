@@ -297,6 +297,27 @@ function renderPet() {
       bubble.setAttribute("data-mood", state.mood);
     }
   }
+
+  // Shrink the window when the pet is alone — no bubble, no panel.
+  // The transparent bounding box is what's silently intercepting clicks
+  // on Claude Desktop underneath. When only the pet body is showing, we
+  // only need a small square around the sprite.
+  autoResizeWindow(showBubble);
+}
+
+// Window sizes:
+//   idle + no bubble  → 140 × 150   (just the pet sprite + drop shadow)
+//   idle + bubble     → 380 × 220   (fits a 2-line bubble to the left)
+//   expanded          → 380 × 760   (full panel, handled by toggleExpand)
+let lastAutoSize = null;
+async function autoResizeWindow(showBubble) {
+  if (state.expanded) return;   // toggleExpand owns the size when expanded
+  const target = showBubble ? { w: 380, h: 220 } : { w: 140, h: 150 };
+  const key = `${target.w}x${target.h}`;
+  if (key === lastAutoSize) return;
+  lastAutoSize = key;
+  try { await invoke("resize_window", { width: target.w, height: target.h }); }
+  catch (e) { console.warn("autoResize failed", e); }
 }
 
 function render() {
@@ -437,8 +458,13 @@ function updatePetFromSessions() {
 
 async function toggleExpand() {
   state.expanded = !state.expanded;
-  const h = state.expanded ? 760 : 220;
-  try { await invoke("resize_window", { width: 380, height: h }); } catch (e) {}
+  if (state.expanded) {
+    try { await invoke("resize_window", { width: 380, height: 760 }); } catch (e) {}
+    lastAutoSize = "380x760";   // stops autoResizeWindow from fighting us
+  } else {
+    // Reset so autoResizeWindow triggers on next render to pick idle size.
+    lastAutoSize = null;
+  }
   render();
 }
 
