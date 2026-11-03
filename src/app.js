@@ -101,11 +101,8 @@ function statusLabel(s, hasPerm, ageSec) {
   if (s === "pending") return hasPerm ? `<span class="stx">needs permission</span>`
                                        : `<span class="stx">needs reply</span>`;
   if (s === "done") {
-    // First 60s post-turn: green celebration. After that: "needs reply" —
-    // Bella clicks to expand and reads Claude's last message to decide
-    // whether it's a question or just a completion.
-    if ((ageSec || 0) < 60) return `<span class="stx done">done ✓</span>`;
-    return `<span class="stx">needs reply</span>`;
+    if ((ageSec || 0) < 30) return `<span class="stx done">done ✓</span>`;
+    return `<span class="stx idle">idle</span>`;
   }
   return `<span class="stx idle">idle</span>`;
 }
@@ -200,6 +197,9 @@ function renderSessions() {
       }
       html += `
         <div class="sess-detail">
+          <div class="open-row">
+            <button class="pbtn open" data-open="${escapeHtml(sess.session_id)}">↗ 打开会话</button>
+          </div>
           ${waitingHtml}
           <div class="log">${logHtml}</div>
           ${permHtml}
@@ -222,6 +222,39 @@ function renderSkins() {
       }
     </button>
   `).join("");
+}
+
+const BREAK_OPTIONS = [
+  { minutes: 0,  label: "Off" },
+  { minutes: 30, label: "30m" },
+  { minutes: 45, label: "45m" },
+  { minutes: 60, label: "60m" },
+];
+function currentBreakMinutes() {
+  return Number((state.config || {}).break_reminder_minutes) || 0;
+}
+function renderBreakPicker() {
+  const tabs = document.getElementById("brk-tabs");
+  if (!tabs) return;
+  const cur = currentBreakMinutes();
+  tabs.innerHTML = BREAK_OPTIONS.map(o => `
+    <button class="brk-tab ${o.minutes === cur ? "active" : ""}" data-break="${o.minutes}">
+      ${o.label}
+    </button>
+  `).join("");
+}
+
+let breakTimer = null;
+function scheduleBreakReminder() {
+  if (breakTimer) { clearTimeout(breakTimer); breakTimer = null; }
+  const mins = currentBreakMinutes();
+  if (mins <= 0) return;
+  breakTimer = setTimeout(() => {
+    const who = state.petName || "there";
+    setCelebration("review", `${who}, 起来动动~`,
+      `坐了 ${mins} 分钟了,站起来舒展一下`, 25000);
+    scheduleBreakReminder();
+  }, mins * 60 * 1000);
 }
 
 // P0-2 helper: signature of the current pending batch. Same input →
@@ -323,7 +356,7 @@ async function autoResizeWindow(showBubble) {
 function render() {
   document.body.classList.toggle("mode-expanded", state.expanded);
   document.body.classList.toggle("mode-idle", !state.expanded);
-  renderSessions(); renderSkins(); renderPet();
+  renderSessions(); renderSkins(); renderBreakPicker(); renderPet();
 }
 
 // ---------- Announcements (done ✓ / still-on-it review) ----------
@@ -417,7 +450,7 @@ function updatePetFromSessions() {
   const s = state.sessions;
   const pendingPerm  = s.filter(x => x.effective_state === "pending" && x.pending_permission);
   const pendingReply = s.filter(x => x.effective_state === "pending" && !x.pending_permission);
-  const staleDone    = s.filter(x => x.effective_state === "done" && (now - (x.updated_at || 0)) >= 60);
+  const staleDone    = [];
   const running      = s.filter(x => x.effective_state === "running");
   const who = state.petName;
 
@@ -436,10 +469,8 @@ function updatePetFromSessions() {
       ? `${who}, a request needs your approval!`
       : `${who}, ${pendingPerm.length} requests need your approval!`;
     state.bubbleSub = pendingPerm.map(x => x.project || "session").join(" · ");
-  } else if (pendingReply.length + staleDone.length > 0) {
-    // Panel label is "needs reply" for both pending-no-perm and done-≥60s;
-    // pet matches with the input running mood so nothing looks stalled.
-    const list = [...pendingReply, ...staleDone];
+  } else if (pendingReply.length > 0) {
+    const list = pendingReply;
     state.mood = "input";
     state.bubbleText = list.length === 1
       ? `${who}, a session is waiting for your reply~`
@@ -478,6 +509,15 @@ document.addEventListener("click", async (e) => {
     if (sess) { sess.pending_permission = null; sess.effective_state = "running"; }
     state.expandedSid = null;
     render();
+    e.preventDefault(); e.stopPropagation(); return;
+  }
+  // Open button sits inside the expanded panel, not the row, but check it
+  // before the row handler so a click never also toggles the row.
+  const openBtn = e.target.closest("[data-open]");
+  if (openBtn) {
+    const sid = openBtn.getAttribute("data-open");
+    try { await invoke("open_session", { cliSid: sid }); }
+    catch (err) { showToast("✗ 打开失败: " + err, "err"); }
     e.preventDefault(); e.stopPropagation(); return;
   }
   const row = e.target.closest(".sess");
@@ -545,6 +585,17 @@ document.addEventListener("click", async (e) => {
       state.skins = payload.skins || [];
       await loadSkin(name);
       render();
+    } catch (err) { console.warn(err); }
+    e.preventDefault(); e.stopPropagation(); return;
+  }
+  const bb = e.target.closest("[data-break]");
+  if (bb) {
+    const mins = Number(bb.getAttribute("data-break")) || 0;
+    try {
+      await invoke("set_break_reminder", { minutes: mins });
+      state.config = { ...(state.config || {}), break_reminder_minutes: mins };
+      scheduleBreakReminder();
+      renderBreakPicker();
     } catch (err) { console.warn(err); }
     e.preventDefault(); e.stopPropagation(); return;
   }
@@ -726,5 +777,6 @@ async function maybePromptAutostart(cfg) {
   checkAnnouncements();
   updatePetFromSessions();
   render();
+  scheduleBreakReminder();
   maybePromptAutostart(cfg);
 })();

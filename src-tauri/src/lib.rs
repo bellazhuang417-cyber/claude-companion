@@ -321,6 +321,15 @@ fn delete_skin(name: String) -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
+fn set_break_reminder(minutes: u64) -> Result<(), String> {
+    let mut cfg = read_config_json();
+    if let Some(obj) = cfg.as_object_mut() {
+        obj.insert("break_reminder_minutes".into(), serde_json::Value::from(minutes));
+    }
+    write_config_json(&cfg)
+}
+
+#[tauri::command]
 fn set_skin(name: String) -> Result<serde_json::Value, String> {
     let mut cfg = read_config_json();
     if let Some(obj) = cfg.as_object_mut() {
@@ -414,6 +423,42 @@ fn get_transcript_tail(path: String, n: usize) -> Vec<serde_json::Value> {
 #[tauri::command]
 fn get_last_assistant_message(path: String) -> Option<String> {
     last_assistant_text(&path)
+}
+
+// Claude desktop keeps its own id (local_<uuid>) next to the CLI id this
+// panel uses. Each desktop session file records both, so scan for the match.
+fn desktop_session_id(cli_sid: &str) -> Option<String> {
+    let root = dirs::home_dir()?.join("Library/Application Support/Claude/claude-code-sessions");
+    for a in std::fs::read_dir(&root).ok()?.flatten() {
+        for b in std::fs::read_dir(a.path()).ok()?.flatten() {
+            for f in std::fs::read_dir(b.path()).ok()?.flatten() {
+                let name = f.file_name().to_string_lossy().to_string();
+                if !name.starts_with("local_") || !name.ends_with(".json") { continue; }
+                let Ok(raw) = std::fs::read_to_string(f.path()) else { continue };
+                let Ok(j) = serde_json::from_str::<serde_json::Value>(&raw) else { continue };
+                if j.get("cliSessionId").and_then(|v| v.as_str()) == Some(cli_sid) {
+                    return j.get("sessionId").and_then(|v| v.as_str()).map(|s| s.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+#[tauri::command]
+fn open_session(cli_sid: String) -> Result<(), String> {
+    if cli_sid.is_empty() || !cli_sid.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+        return Err(format!("bad session id: {}", cli_sid));
+    }
+    let local = desktop_session_id(&cli_sid)
+        .ok_or_else(|| "这个会话在 Claude 桌面版里找不到".to_string())?;
+    let url = format!("claude://code/continue?session={}", local);
+    let status = std::process::Command::new("/usr/bin/open")
+        .arg(&url)
+        .status()
+        .map_err(|e| e.to_string())?;
+    if !status.success() { return Err("打开失败".into()); }
+    Ok(())
 }
 
 // ---------- Skin installer (port of Hammerspoon installSkinFromZip) ----------
@@ -577,10 +622,13 @@ fn resize_window(window: tauri::WebviewWindow, width: f64, height: f64) -> Resul
     let current_pos = window.outer_position().map_err(|e| e.to_string())?;
     let current_size = window.outer_size().map_err(|e| e.to_string())?;
     let cur_logical_h = current_size.height as f64 / scale;
+    let cur_logical_w = current_size.width as f64 / scale;
     let cur_logical_y = current_pos.y as f64 / scale;
     let cur_logical_x = current_pos.x as f64 / scale;
     let bottom = cur_logical_y + cur_logical_h;
+    let right = cur_logical_x + cur_logical_w;
     let mut new_y = bottom - height;
+    let new_x = right - width;
 
     // P1-2: don't let the panel's top edge fly above the screen. Find the
     // monitor the pet's bottom-right sits on and clamp new_y to its usable
@@ -614,7 +662,7 @@ fn resize_window(window: tauri::WebviewWindow, width: f64, height: f64) -> Resul
     }
 
     window.set_size(LogicalSize::new(width, height)).map_err(|e| e.to_string())?;
-    window.set_position(LogicalPosition::new(cur_logical_x, new_y)).map_err(|e| e.to_string())?;
+    window.set_position(LogicalPosition::new(new_x, new_y)).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -697,8 +745,8 @@ pub fn run() {
         .manage(AppState { _watcher: Mutex::new(None), tray_state: Mutex::new(TrayTitleState::default()) })
         .invoke_handler(tauri::generate_handler![
             get_sessions, get_skins, get_config, get_pet_name,
-            set_skin, delete_skin, decide, get_skin_asset, get_skin_manifest,
-            get_transcript_tail, get_last_assistant_message, install_skin_zip,
+            set_skin, set_break_reminder, delete_skin, decide, get_skin_asset, get_skin_manifest,
+            get_transcript_tail, get_last_assistant_message, install_skin_zip, open_session,
             set_click_through, resize_window, start_drag, reset_pet_position,
             save_pet_position, mark_autostart_prompted, quit_app,
         ])

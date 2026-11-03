@@ -173,6 +173,30 @@ body.mode-expanded .dropdown {
   color: var(--st-input);
 }
 
+.break-picker { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.break-picker .sp-label {
+  color: var(--fg-mute); font-size: 10px; letter-spacing: 0.06em;
+  text-transform: uppercase; padding-top: 4px;
+}
+.break-picker .brk-tabs { display: flex; gap: 4px; flex-wrap: wrap; flex: 1; }
+.break-picker .brk-tab {
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.10);
+  color: var(--fg-soft);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+.break-picker .brk-tab:hover { background: rgba(255,255,255,0.06); color: var(--fg); }
+.break-picker .brk-tab.active {
+  background: rgba(232,76,136,0.14);
+  border-color: rgba(232,76,136,0.45);
+  color: var(--st-input);
+}
+
 /* Pet */
 .pet-wrap {
   position: absolute;
@@ -249,6 +273,12 @@ body.mode-expanded .bubble { display: none !important; }
   color: var(--st-input);
 }
 .sess-detail .pbtn:hover { filter: brightness(1.2); }
+.sess-detail .open-row { margin-bottom: 8px; }
+.sess-detail .pbtn.open {
+  background: rgba(255,255,255,0.06);
+  border-color: rgba(255,255,255,0.18);
+  color: var(--fg);
+}
 /* P0-1: remote window countdown + expired notice, ported from HS v0.3.9 */
 .sess-detail .premote {
   margin-top: 6px; font-size: 10px; color: var(--fg-mute); text-align: right;
